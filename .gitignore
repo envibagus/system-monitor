@@ -1,0 +1,13 @@
+.build/
+.swiftpm/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+.DS_Store
+.agent/
+.agents/
+.kiro/
+.planning/
+.windsurf/
+.claude/
+skills-lock.json
