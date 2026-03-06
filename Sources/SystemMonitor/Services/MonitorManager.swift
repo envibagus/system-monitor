@@ -61,9 +61,9 @@ final class MonitorManager: @unchecked Sendable {
         }
         batteryTimer?.resume()
 
-        // Storage timer (30s)
+        // Storage timer (60s — categories scan is expensive)
         storageTimer = DispatchSource.makeTimerSource(queue: timerQueue)
-        storageTimer?.schedule(deadline: .now() + 1.0, repeating: 30.0)
+        storageTimer?.schedule(deadline: .now() + 1.0, repeating: 60.0)
         storageTimer?.setEventHandler { [weak self] in
             self?.storageService.refresh()
         }

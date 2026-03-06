@@ -76,6 +76,23 @@ PLIST
 # Create PkgInfo
 echo -n "APPL????" > "$APP_DIR/Contents/PkgInfo"
 
+# Create entitlements for system monitoring
+ENTITLEMENTS="$BUILD_DIR/SystemMonitor.entitlements"
+cat > "$ENTITLEMENTS" << 'ENTPLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+</dict>
+</plist>
+ENTPLIST
+
+# Ad-hoc code sign so macOS doesn't prompt for every directory access
+echo "Code signing..."
+codesign --force --sign - --entitlements "$ENTITLEMENTS" --deep "$APP_DIR"
+
 echo ""
 echo "App bundle created at: $APP_DIR"
 echo ""

@@ -44,12 +44,12 @@ private struct SidebarItemView: View {
         HStack(spacing: 10) {
             Image(systemName: page.sfSymbol)
                 .font(.system(size: 14))
-                .foregroundStyle(isSelected ? .white : Theme.secondaryText)
+                .foregroundStyle(isSelected ? Theme.sidebarSelectedText : Theme.secondaryText)
                 .frame(width: 20)
 
             Text(page.title)
                 .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                .foregroundStyle(isSelected ? .white : Theme.primaryText)
+                .foregroundStyle(isSelected ? Theme.sidebarSelectedText : Theme.primaryText)
 
             Spacer()
         }
@@ -61,7 +61,7 @@ private struct SidebarItemView: View {
                     .fill(Theme.accentBlue.opacity(0.25))
             } else if isHovered {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.white.opacity(0.05))
+                    .fill(Theme.sidebarHover.opacity(0.05))
             }
         }
         .padding(.horizontal, 8)

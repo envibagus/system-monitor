@@ -48,54 +48,53 @@ final class StorageService: @unchecked Sendable {
             }
         }
 
-        // Match macOS System Settings categories
+        // Scan categories using a single du call for speed (only TCC-safe paths)
         let home = NSHomeDirectory()
         var scannedCategories: [StorageCategory] = []
         var accountedSize: UInt64 = 0
 
-        // Applications — app bundles + per-app data (matches macOS System Settings)
-        let appsSize = allocatedSize("/Applications")
-            + allocatedSize("/System/Applications")
-            + allocatedSize(home + "/Applications")
-            + allocatedSize(home + "/Library/Application Support")
-            + allocatedSize(home + "/Library/Containers")
-            + allocatedSize(home + "/Library/Caches")
-        scannedCategories.append(StorageCategory(id: "applications", name: "Applications", size: appsSize, colorName: "storageApps"))
-        accountedSize += appsSize
+        // Batch-scan all safe paths at once
+        let pathMap: [(id: String, name: String, colorName: String, paths: [String])] = [
+            ("applications", "Applications", "storageApps", [
+                "/Applications",
+                "/System/Applications",
+                home + "/Applications"
+            ]),
+            ("developer", "Developer", "storageDeveloper", [
+                home + "/Developer",
+                home + "/Library/Developer"
+            ]),
+            ("documents", "Documents", "storageDocuments", [
+                home + "/Documents",
+                home + "/Desktop",
+                home + "/Downloads"
+            ]),
+            ("trash", "Trash", "storageTrash", [
+                home + "/.Trash"
+            ])
+        ]
 
-        // Developer — ~/Developer + ~/Library/Developer
-        let devSize = allocatedSize(home + "/Developer") + allocatedSize(home + "/Library/Developer")
-        scannedCategories.append(StorageCategory(id: "developer", name: "Developer", size: devSize, colorName: "storageDeveloper"))
-        accountedSize += devSize
-
-        // Documents — ~/Documents + ~/Desktop + ~/Downloads
-        let docsSize = allocatedSize(home + "/Documents") + allocatedSize(home + "/Desktop") + allocatedSize(home + "/Downloads")
-        scannedCategories.append(StorageCategory(id: "documents", name: "Documents", size: docsSize, colorName: "storageDocuments"))
-        accountedSize += docsSize
-
-        // iCloud Drive
-        let icloudSize = allocatedSize(home + "/Library/Mobile Documents")
-        scannedCategories.append(StorageCategory(id: "icloud", name: "iCloud Drive", size: icloudSize, colorName: "storageICloud"))
-        accountedSize += icloudSize
-
-        // Photos
-        let photosSize = allocatedSize(home + "/Pictures/Photos Library.photoslibrary")
-        scannedCategories.append(StorageCategory(id: "photos", name: "Photos", size: photosSize, colorName: "storagePhotos"))
-        accountedSize += photosSize
-
-        // Podcasts
-        let podcastDirs = (try? FileManager.default.contentsOfDirectory(atPath: home + "/Library/Group Containers"))?.filter { $0.contains("apple.podcasts") } ?? []
-        var podcastSize: UInt64 = 0
-        for dir in podcastDirs {
-            podcastSize += allocatedSize(home + "/Library/Group Containers/" + dir)
+        // Collect all existing paths for a single du call
+        let fm = FileManager.default
+        var allPaths: [String] = []
+        for entry in pathMap {
+            for path in entry.paths {
+                if fm.fileExists(atPath: path) {
+                    allPaths.append(path)
+                }
+            }
         }
-        scannedCategories.append(StorageCategory(id: "podcasts", name: "Podcasts", size: podcastSize, colorName: "storagePodcasts"))
-        accountedSize += podcastSize
 
-        // Trash
-        let trashSize = allocatedSize(home + "/.Trash")
-        scannedCategories.append(StorageCategory(id: "trash", name: "Trash", size: trashSize, colorName: "storageTrash"))
-        accountedSize += trashSize
+        let sizeResults = batchAllocatedSizes(allPaths)
+
+        for entry in pathMap {
+            var totalSize: UInt64 = 0
+            for path in entry.paths {
+                totalSize += sizeResults[path] ?? 0
+            }
+            scannedCategories.append(StorageCategory(id: entry.id, name: entry.name, size: totalSize, colorName: entry.colorName))
+            accountedSize += totalSize
+        }
 
         // macOS (system) = used - everything else
         let macosSize = info.usedCapacity > accountedSize ? info.usedCapacity - accountedSize : 0
@@ -106,39 +105,38 @@ final class StorageService: @unchecked Sendable {
         return info
     }
 
-    /// Recursively calculate allocated disk size for a path
-    private func allocatedSize(_ path: String) -> UInt64 {
-        let fm = FileManager.default
-        let url = URL(fileURLWithPath: path)
+    /// Batch disk size calculation — single du process for all paths
+    private func batchAllocatedSizes(_ paths: [String]) -> [String: UInt64] {
+        guard !paths.isEmpty else { return [:] }
 
-        // Check if path exists
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: path, isDirectory: &isDir) else { return 0 }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/du")
+        process.arguments = ["-sk"] + paths
 
-        // Single file
-        if !isDir.boolValue {
-            let values = try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey])
-            return UInt64(values?.totalFileAllocatedSize ?? 0)
-        }
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
 
-        // Directory — enumerate all contents (include hidden files for accurate sizing)
-        guard let enumerator = fm.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.totalFileAllocatedSizeKey],
-            options: []
-        ) else { return 0 }
+        var results: [String: UInt64] = [:]
 
-        var total: UInt64 = 0
-        for case let fileURL as URL in enumerator {
-            if enumerator.level > 10 {
-                enumerator.skipDescendants()
-                continue
+        do {
+            try process.run()
+            process.waitUntilExit()
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let output = String(data: data, encoding: .utf8) {
+                for line in output.components(separatedBy: "\n") where !line.isEmpty {
+                    let parts = line.split(separator: "\t", maxSplits: 1)
+                    if parts.count == 2,
+                       let sizeKB = UInt64(parts[0]) {
+                        let path = String(parts[1])
+                        results[path] = sizeKB * 1024
+                    }
+                }
             }
-            if let values = try? fileURL.resourceValues(forKeys: [.totalFileAllocatedSizeKey]),
-               let size = values.totalFileAllocatedSize {
-                total += UInt64(size)
-            }
+        } catch {
+            // Return empty results if du fails
         }
-        return total
+        return results
     }
 }
